@@ -649,10 +649,11 @@
 </nav>
 
 <script>
-/* NAQAA Website Contact conversion: intent to contact through WhatsApp or phone.
-   WhatsApp click is NOT proof a message was sent; confirmed inbound messages
-   continue to be captured separately through YCloud/n8n Offline Events.
-   WhatsApp text and the destination number are not modified. */
+/* NAQAA confirmed-message policy: never fire Website Contact for a WhatsApp CLICK.
+   WhatsApp conversions are created only after actual incoming messages through
+   YCloud/n8n, recorded as TikTok OFFLINE Contact (not website Pixel Contact).
+   Website Contact here is reserved for PHONE BUTTON CLICKS only; not completed calls.
+   WhatsApp message text, links, and phone numbers remain unchanged. */
 (function () {
   var lastClick = { whatsapp: 0, phone: 0 };
   function methodOf(link) {
@@ -671,12 +672,14 @@
     if (!link || event.defaultPrevented) return;
     var method = methodOf(link);
     if (!method) return;
+    // No TikTok conversion for WhatsApp click. A message must actually arrive in YCloud.
+    if (method === 'whatsapp') return;
     var now = Date.now();
     if (now - lastClick[method] < 1000) return;
     lastClick[method] = now;
 
     // For a same-tab telephone link, permit a short network dispatch window.
-    // Do not intercept WhatsApp; it continues to open in a separate tab as before.
+    // WhatsApp is untouched; only telephone button clicks are tracked here.
     var isPlainPhoneClick = method === 'phone' && event.button === 0 &&
       !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
     if (isPlainPhoneClick) event.preventDefault();
