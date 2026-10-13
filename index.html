@@ -649,27 +649,54 @@
 </nav>
 
 <script>
-/* NAQAA: Contact = phone-button click (not a completed call).
-   WhatsApp messages are confirmed independently via YCloud/n8n Offline Events.
-   No persistent sessionStorage suppression of legitimate phone clicks. */
+/* NAQAA Website Contact conversion: intent to contact through WhatsApp or phone.
+   WhatsApp click is NOT proof a message was sent; confirmed inbound messages
+   continue to be captured separately through YCloud/n8n Offline Events.
+   WhatsApp text and the destination number are not modified. */
 (function () {
-  let lastContactClick = 0;
+  var lastClick = { whatsapp: 0, phone: 0 };
+  function methodOf(link) {
+    var href = link.getAttribute('href') || '';
+    if (/^tel:/i.test(href)) return 'phone';
+    try {
+      var url = new URL(href, window.location.href);
+      var host = url.hostname.toLowerCase();
+      if (host === 'wa.me' || host === 'api.whatsapp.com' || host === 'web.whatsapp.com') return 'whatsapp';
+    } catch (error) { /* skip invalid links */ }
+    return null;
+  }
   document.addEventListener('click', function (event) {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const link = target.closest('a[href^="tel:"]');
-    if (!link) return;
-    const now = Date.now();
-    if (now - lastContactClick < 1500) return; // prevent accidental double taps
-    lastContactClick = now;
+    if (!(event.target instanceof Element)) return;
+    var link = event.target.closest('a[href]');
+    if (!link || event.defaultPrevented) return;
+    var method = methodOf(link);
+    if (!method) return;
+    var now = Date.now();
+    if (now - lastClick[method] < 1000) return;
+    lastClick[method] = now;
+
+    // For a same-tab telephone link, permit a short network dispatch window.
+    // Do not intercept WhatsApp; it continues to open in a separate tab as before.
+    var isPlainPhoneClick = method === 'phone' && event.button === 0 &&
+      !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+    if (isPlainPhoneClick) event.preventDefault();
     try {
       if (window.ttq && typeof window.ttq.track === 'function') {
-        window.ttq.track('Contact', {
-          content_type: 'product',
-          content_name: 'Naqaa Clean - Phone Button Click'
-        });
+        window.ttq.track('Contact');
+        if (window.location.search.indexOf('naqaa_debug=1') !== -1) {
+          console.info('[NAQAA] Website Contact event queued:', method);
+        }
       }
-    } catch (e) { /* do not interrupt the dialer */ }
+    } catch (error) {
+      if (window.location.search.indexOf('naqaa_debug=1') !== -1) {
+        console.warn('[NAQAA] Pixel Contact error:', error);
+      }
+    } finally {
+      if (isPlainPhoneClick) {
+        var phoneUrl = link.href;
+        window.setTimeout(function () { window.location.href = phoneUrl; }, 250);
+      }
+    }
   }, true);
 })();
 </script>
