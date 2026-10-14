@@ -648,61 +648,10 @@
   </a>
 </nav>
 
-<script>
-/* NAQAA confirmed-message policy: never fire Website Contact for a WhatsApp CLICK.
-   WhatsApp conversions are created only after actual incoming messages through
-   YCloud/n8n, recorded as TikTok OFFLINE Contact (not website Pixel Contact).
-   Website Contact here is reserved for PHONE BUTTON CLICKS only; not completed calls.
-   WhatsApp message text, links, and phone numbers remain unchanged. */
-(function () {
-  var lastClick = { whatsapp: 0, phone: 0 };
-  function methodOf(link) {
-    var href = link.getAttribute('href') || '';
-    if (/^tel:/i.test(href)) return 'phone';
-    try {
-      var url = new URL(href, window.location.href);
-      var host = url.hostname.toLowerCase();
-      if (host === 'wa.me' || host === 'api.whatsapp.com' || host === 'web.whatsapp.com') return 'whatsapp';
-    } catch (error) { /* skip invalid links */ }
-    return null;
-  }
-  document.addEventListener('click', function (event) {
-    if (!(event.target instanceof Element)) return;
-    var link = event.target.closest('a[href]');
-    if (!link || event.defaultPrevented) return;
-    var method = methodOf(link);
-    if (!method) return;
-    // No TikTok conversion for WhatsApp click. A message must actually arrive in YCloud.
-    if (method === 'whatsapp') return;
-    var now = Date.now();
-    if (now - lastClick[method] < 1000) return;
-    lastClick[method] = now;
-
-    // For a same-tab telephone link, permit a short network dispatch window.
-    // WhatsApp is untouched; only telephone button clicks are tracked here.
-    var isPlainPhoneClick = method === 'phone' && event.button === 0 &&
-      !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
-    if (isPlainPhoneClick) event.preventDefault();
-    try {
-      if (window.ttq && typeof window.ttq.track === 'function') {
-        window.ttq.track('Contact');
-        if (window.location.search.indexOf('naqaa_debug=1') !== -1) {
-          console.info('[NAQAA] Website Contact event queued:', method);
-        }
-      }
-    } catch (error) {
-      if (window.location.search.indexOf('naqaa_debug=1') !== -1) {
-        console.warn('[NAQAA] Pixel Contact error:', error);
-      }
-    } finally {
-      if (isPlainPhoneClick) {
-        var phoneUrl = link.href;
-        window.setTimeout(function () { window.location.href = phoneUrl; }, 250);
-      }
-    }
-  }, true);
-})();
-</script>
+<!-- NAQAA verified-only conversion policy, 2026-10-15.
+     The webpage emits PageView only, not Contact on button clicks.
+     Confirmed new Whatsapp messages / 5s inbound calls use n8n V5 independently.
+     This page does not assert attribution or call/message completion. -->
 
 
 
