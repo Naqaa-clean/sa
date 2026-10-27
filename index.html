@@ -780,6 +780,31 @@
   // Pixel loads asynchronously. Wait for its ready callback or at most 400 ms;
   // only the real browser _ttp is sent, if present. No click event is counted.
   let issuerRequestStarted = false;
+  let issuerFinished = false;
+  let codeReady = false;
+  let pendingWhatsAppNavigation = false;
+  let finishIssuer;
+  const issuerFinishedPromise = new Promise(resolve => { finishIssuer = resolve; });
+
+  // Mobile-safe: avoid racing WhatsApp navigation against the asynchronous issuer.
+  // One tap only; if the issuer does not respond promptly, use the original WhatsApp link.
+  waLinks.forEach(link => {
+    link.addEventListener('click', async event => {
+      if (event.defaultPrevented || event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      if (codeReady || issuerFinished) return;
+      event.preventDefault();
+      if (pendingWhatsAppNavigation) return;
+      pendingWhatsAppNavigation = true;
+      if (!issuerRequestStarted) requestVisitCode();
+      await Promise.race([
+        issuerFinishedPromise,
+        new Promise(resolve => setTimeout(resolve, 3500))
+      ]);
+      // Same-tab navigation is more reliable on mobile than creating a popup after an await.
+      window.location.assign(link.href);
+    }, { passive:false });
+  });
+
   function requestVisitCode() {
     if (issuerRequestStarted) return;
     issuerRequestStarted = true;
@@ -807,10 +832,15 @@
         u.searchParams.set('text', message);
         a.href = u.toString();
       });
+      codeReady = true;
       try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({...session,expires_at:result.expires_at})); } catch {}
     }).catch(() => {
       // Fail-open: WhatsApp links are unchanged if issuer or Pixel is unavailable.
-    }).finally(() => clearTimeout(timeout));
+    }).finally(() => {
+      clearTimeout(timeout);
+      issuerFinished = true;
+      finishIssuer();
+    });
   }
   const pixelReadyFallback = setTimeout(requestVisitCode, 400);
   try {
