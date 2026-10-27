@@ -710,14 +710,13 @@
 
 
 <script>
-/* NAQAA-001 — Session-to-WhatsApp code (STAGING, DISABLED by default).
-   This is an ADD-ONLY patch. No browser Contact / Purchase events.
-   Enable only after issuer production routing, rate limits, consent/privacy
-   review, signed YCloud/atomic outbox integration and canary verification.
+/* NAQAA-001 — Visit code for WhatsApp.
+   No browser Contact / Purchase. Contact is recorded only after verified inbound message or qualified call.
+   Real _ttp is read at request time; missing values are never fabricated.
 */
 (() => {
   'use strict';
-  const NAQAA_CODE_FEATURE_ENABLED = true; // HARD OFF: review/preview only
+  const NAQAA_CODE_FEATURE_ENABLED = true; // LIVE (issuer must also be in LIVE mode)
   if (!NAQAA_CODE_FEATURE_ENABLED) return;
 
   const CLIENT_ID = 'NAQAA-001';
@@ -752,17 +751,19 @@
   const visitId = reuseVisit ? stored.visit_id : crypto.randomUUID();
   const ttclid = ambiguousClick ? null : (newClick || (reuseVisit && TTCLID_RX.test(stored.ttclid || '') ? stored.ttclid : null));
 
-  // _ttp is read only from the real first-party cookie (when available).
-  let ttp = null;
-  try {
-    for (const part of document.cookie.split(';')) {
-      const sep = part.indexOf('=');
-      if (sep < 0 || part.slice(0, sep).trim() !== '_ttp') continue;
-      const value = part.slice(sep + 1).trim();
-      if (TTP_RX.test(value)) ttp = value;
-      break;
-    }
-  } catch { /* No tracking cookie available */ }
+  // Read _ttp only when requesting a visit code, after giving the async Pixel
+  // a short opportunity to initialize. Never invent a cookie or a click ID.
+  function readRealTtp() {
+    try {
+      for (const part of document.cookie.split(';')) {
+        const sep = part.indexOf('=');
+        if (sep < 0 || part.slice(0, sep).trim() !== '_ttp') continue;
+        const value = part.slice(sep + 1).trim();
+        return TTP_RX.test(value) ? value : null;
+      }
+    } catch { /* Cookie may be unavailable */ }
+    return null;
+  }
 
   const session = {visit_id:visitId, ttclid, created_at_ms:reuseVisit ? stored.created_at_ms : Date.now()};
   try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session)); } catch { /* storage off */ }
@@ -776,33 +777,47 @@
   });
   if (!waLinks.length) return;
 
-  const aborter = new AbortController();
-  const timeout = setTimeout(() => aborter.abort(), 5500);
-  fetch(ISSUER_URL, {
-    method:'POST',
-    mode:'cors',
-    credentials:'omit',
-    headers: {'Content-Type':'text/plain;charset=UTF-8'},
-    body:JSON.stringify({client_id:CLIENT_ID,visit_id:visitId,page_url:LANDING_URL,ttclid,ttp}),
-    signal:aborter.signal
-  }).then(response => {
-    if (!response.ok) throw new Error('issuer not available');
-    return response.json();
-  }).then(result => {
-    const expiry = Date.parse(result?.expires_at || '');
-    if (result?.client_id !== CLIENT_ID || !CODE_RX.test(result?.code || '') ||
-        !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 8*86400000) return;
-    const message = 'السلام عليكم، أريد أن أستفسر عن خدمات النقاء كلين وأستفيد من خصومات الموقع.\n\n🎁 كود الخصم الخاص بي: ' + result.code;
-    waLinks.forEach(a => {
-      // Other properties (target, rel, aria-label, classes) stay unchanged.
-      const u = new URL(a.href);
-      u.searchParams.set('text', message);
-      a.href = u.toString();
-    });
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({...session,expires_at:result.expires_at})); } catch {}
-  }).catch(() => {
-    // Fail-open: no additional form, no blocked WhatsApp click, no inferred Contact.
-  }).finally(() => clearTimeout(timeout));
+  // Pixel loads asynchronously. Wait for its ready callback or at most 400 ms;
+  // only the real browser _ttp is sent, if present. No click event is counted.
+  let issuerRequestStarted = false;
+  function requestVisitCode() {
+    if (issuerRequestStarted) return;
+    issuerRequestStarted = true;
+    clearTimeout(pixelReadyFallback);
+    const ttp = readRealTtp();
+    const aborter = new AbortController();
+    const timeout = setTimeout(() => aborter.abort(), 5500);
+    fetch(ISSUER_URL, {
+      method:'POST',
+      mode:'cors',
+      credentials:'omit',
+      headers: {'Content-Type':'text/plain;charset=UTF-8'},
+      body:JSON.stringify({client_id:CLIENT_ID,visit_id:visitId,page_url:LANDING_URL,ttclid,ttp}),
+      signal:aborter.signal
+    }).then(response => {
+      if (!response.ok) throw new Error('issuer not available');
+      return response.json();
+    }).then(result => {
+      const expiry = Date.parse(result?.expires_at || '');
+      if (result?.client_id !== CLIENT_ID || !CODE_RX.test(result?.code || '') ||
+          !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 8*86400000) return;
+      const message = 'السلام عليكم، أريد أن أستفسر عن خدمات النقاء كلين وأستفيد من خصومات الموقع.\n\n🎁 كود الخصم الخاص بي: ' + result.code;
+      waLinks.forEach(a => {
+        const u = new URL(a.href);
+        u.searchParams.set('text', message);
+        a.href = u.toString();
+      });
+      try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({...session,expires_at:result.expires_at})); } catch {}
+    }).catch(() => {
+      // Fail-open: WhatsApp links are unchanged if issuer or Pixel is unavailable.
+    }).finally(() => clearTimeout(timeout));
+  }
+  const pixelReadyFallback = setTimeout(requestVisitCode, 400);
+  try {
+    if (window.ttq && typeof window.ttq.ready === 'function') {
+      window.ttq.ready(requestVisitCode);
+    }
+  } catch { /* The 400 ms fallback still requests the visit code. */ }
 })();
 </script>
 
