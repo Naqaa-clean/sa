@@ -709,5 +709,102 @@
 </script>
 
 
+<script>
+/* NAQAA-001 — Session-to-WhatsApp code (STAGING, DISABLED by default).
+   This is an ADD-ONLY patch. No browser Contact / Purchase events.
+   Enable only after issuer production routing, rate limits, consent/privacy
+   review, signed YCloud/atomic outbox integration and canary verification.
+*/
+(() => {
+  'use strict';
+  const NAQAA_CODE_FEATURE_ENABLED = true; // HARD OFF: review/preview only
+  if (!NAQAA_CODE_FEATURE_ENABLED) return;
+
+  const CLIENT_ID = 'NAQAA-001';
+  const PHONE = '966557870800';
+  const LANDING_URL = 'https://naqaa-clean.github.io/sa/';
+  const ISSUER_URL = 'https://n8n.srv2034935.hstgr.cloud/webhook/naqaa-visit-code-v1';
+  const STORAGE_KEY = 'naqaa_attribution_visit_v1';
+  const UUID_RX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const TTCLID_RX = /^[A-Za-z0-9._-]{12,512}$/;
+  const TTP_RX = /^[A-Za-z0-9._-]{6,256}$/;
+  const CODE_RX = /^NQ-[0-9A-F]{10}$/;
+
+  // Do not send visitor IDs from third-party embeds or a copied page.
+  if (location.origin !== 'https://naqaa-clean.github.io' || location.pathname !== '/sa/') return;
+  if (!window.crypto || typeof crypto.randomUUID !== 'function') return;
+
+  const stored = (() => {
+    try { return JSON.parse(sessionStorage.getItem(STORAGE_KEY) || '{}'); }
+    catch { return {}; }
+  })();
+  const params = new URLSearchParams(location.search);
+  const idParams = params.getAll('ttclid');
+  const newClick = idParams.length === 1 && TTCLID_RX.test(idParams[0]) ? idParams[0] : null;
+  const oldValid = UUID_RX.test(stored.visit_id || '') &&
+    Number.isFinite(Number(stored.created_at_ms)) &&
+    Date.now() - Number(stored.created_at_ms) >= 0 &&
+    Date.now() - Number(stored.created_at_ms) < 7 * 86400000 &&
+    (!stored.expires_at || (Number.isFinite(Date.parse(stored.expires_at)) && Date.parse(stored.expires_at) > Date.now()));
+  const clickChanged = !!newClick && newClick !== stored.ttclid;
+  const ambiguousClick = idParams.length > 1 || (idParams.length === 1 && !newClick);
+  const reuseVisit = oldValid && !clickChanged && !ambiguousClick;
+  const visitId = reuseVisit ? stored.visit_id : crypto.randomUUID();
+  const ttclid = ambiguousClick ? null : (newClick || (reuseVisit && TTCLID_RX.test(stored.ttclid || '') ? stored.ttclid : null));
+
+  // _ttp is read only from the real first-party cookie (when available).
+  let ttp = null;
+  try {
+    for (const part of document.cookie.split(';')) {
+      const sep = part.indexOf('=');
+      if (sep < 0 || part.slice(0, sep).trim() !== '_ttp') continue;
+      const value = part.slice(sep + 1).trim();
+      if (TTP_RX.test(value)) ttp = value;
+      break;
+    }
+  } catch { /* No tracking cookie available */ }
+
+  const session = {visit_id:visitId, ttclid, created_at_ms:reuseVisit ? stored.created_at_ms : Date.now()};
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(session)); } catch { /* storage off */ }
+
+  // Existing WhatsApp hrefs remain completely unchanged until API-confirmed code.
+  const waLinks = [...document.querySelectorAll('a[href]')].filter(a => {
+    try {
+      const u = new URL(a.href, location.href);
+      return u.protocol === 'https:' && u.hostname === 'wa.me' && u.pathname === '/' + PHONE;
+    } catch { return false; }
+  });
+  if (!waLinks.length) return;
+
+  const aborter = new AbortController();
+  const timeout = setTimeout(() => aborter.abort(), 5500);
+  fetch(ISSUER_URL, {
+    method:'POST',
+    mode:'cors',
+    credentials:'omit',
+    headers: {'Content-Type':'text/plain;charset=UTF-8'},
+    body:JSON.stringify({client_id:CLIENT_ID,visit_id:visitId,page_url:LANDING_URL,ttclid,ttp}),
+    signal:aborter.signal
+  }).then(response => {
+    if (!response.ok) throw new Error('issuer not available');
+    return response.json();
+  }).then(result => {
+    const expiry = Date.parse(result?.expires_at || '');
+    if (result?.client_id !== CLIENT_ID || !CODE_RX.test(result?.code || '') ||
+        !Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 8*86400000) return;
+    const message = 'السلام عليكم، عايز أستفسر عن خدمات النقاء كلين.\n\n📌 كود طلبي من الموقع: ' + result.code;
+    waLinks.forEach(a => {
+      // Other properties (target, rel, aria-label, classes) stay unchanged.
+      const u = new URL(a.href);
+      u.searchParams.set('text', message);
+      a.href = u.toString();
+    });
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify({...session,expires_at:result.expires_at})); } catch {}
+  }).catch(() => {
+    // Fail-open: no additional form, no blocked WhatsApp click, no inferred Contact.
+  }).finally(() => clearTimeout(timeout));
+})();
+</script>
+
 </body>
 </html>
